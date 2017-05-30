@@ -2,6 +2,15 @@
 name = "regex_generate"
 version = "0.1.0"
 authors = ["CryptArchy <codexarcanum@gmail.com>"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/CryptArchy/regex_generate"
+homepage = "https://github.com/CryptArchy/regex_generate"
+description = """
+Use regular expressions to generate text.
+"""
+keywords = ["regex", "text", "generation"]
+categories = ["text-processing"]
 
 [dependencies]
 rand = "0.3.15"
