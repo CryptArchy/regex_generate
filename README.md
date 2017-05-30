@@ -10,7 +10,9 @@ Using regex_syntax made this crate 1000x easier to produce.
 
 ## Documentation
 
-None yet, coming soon.
+Magically generated and graciously hosted by [Docs.rs](https://docs.rs/regex_generate).
+
+The documentation is not good right now.
 
 ## Usage
 
@@ -69,6 +71,7 @@ Run benchmarks with `rustup run nightly cargo bench`
 ## TODO
 
 - [ ] Use a custom error type
+- [ ] Write documentation
 - [ ] Cleanup uses of `.expect("Fail")`
 - [ ] Add convenience method for directly generating complete strings
 - [ ] Add tests for regex bytes feature
