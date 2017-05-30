@@ -28,6 +28,7 @@ extern crate regex_generate;
 ```
 
 This example generates a date in YYYY-MM-DD format and prints it.
+Adapted from the example for rust-lang/regex.
 
 ```rust
 extern crate regex_generate;
@@ -78,4 +79,4 @@ Run benchmarks with `rustup run nightly cargo bench`
 
 regex_generate is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0), with portions covered by various BSD-like licenses.
 
-See LICENSE-APACHE, and LICENSE-MIT for details.
+See LICENSE-APACHE and LICENSE-MIT for details.
