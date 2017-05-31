@@ -8,6 +8,8 @@ use regex_syntax::{Expr, Repeater};
 use std::io;
 
 const DEFAULT_MAX_REPEAT: u32 = 100;
+const NEWLINE_U8: u8 = b'\n';
+const NEWLINE: char = '\n';
 
 /// Generate provides methods to fill a buffer with generated values
 pub trait Generate<T: io::Write> {
@@ -66,8 +68,8 @@ impl<T: io::Write> Generate<T> for Expr {
                 Ok(())
             },
             &Expr::AnyCharNoNL => {
-                let mut c = '\n';
-                while c == '\n' { c = rng.gen::<char>(); }
+                let mut c = NEWLINE;
+                while c == NEWLINE { c = rng.gen::<char>(); }
                 write_char(c, buffer);
                 Ok(())
             },
@@ -87,17 +89,17 @@ impl<T: io::Write> Generate<T> for Expr {
                     }
                 }
             },
-            &Expr::Group{e: ref exp, i:_, name:_} => exp.generate(buffer),
+            &Expr::Group{e: ref exp, i:_, name:_} => exp.generate_with_max_repeat(buffer, max_repeat),
             &Expr::Concat(ref exps) => {
                 for exp in exps.iter() {
-                    exp.generate(buffer).expect("Fail");
+                    exp.generate_with_max_repeat(buffer, max_repeat).expect("Fail");
                 }
                 Ok(())
             },
             &Expr::Alternate(ref exps) => {
                 let idx = rng.gen_range(0, exps.len());
                 let ref exp = exps[idx];
-                exp.generate(buffer)
+                exp.generate_with_max_repeat(buffer, max_repeat)
             },
             &Expr::Repeat{e: ref exp, r: rep, greedy} => {
                 let range = match rep {
@@ -109,14 +111,14 @@ impl<T: io::Write> Generate<T> for Expr {
                 };
                 let count = rng.gen_range(range.start, range.end);
                 for _ in 0..count {
-                    exp.generate(buffer).expect("Fail");
+                    exp.generate_with_max_repeat(buffer, max_repeat).expect("Fail");
                 }
                 Ok(())
             },
             &Expr::AnyByte => buffer.write_u8(rng.gen::<u8>()),
             &Expr::AnyByteNoNL => {
-                let mut c = 10;
-                while c == 10 { c = rng.gen::<u8>(); }
+                let mut c = NEWLINE_U8;
+                while c == NEWLINE_U8 { c = rng.gen::<u8>(); }
                 buffer.write_u8(c)
             }
             &Expr::ClassBytes(ref ranges) => {
