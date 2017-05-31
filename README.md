@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-regex_generate = "0.1"
+regex_generate = "0.2"
 ```
 
 and this to your crate root:
