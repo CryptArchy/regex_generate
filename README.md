@@ -34,28 +34,29 @@ Adapted from the example for rust-lang/regex.
 
 ```rust
 extern crate regex_generate;
+extern crate rand;
 
-use regex_generate::{Generate, Generator};
+use regex_generate::{DEFAULT_MAX_REPEAT, Generator};
 
 fn main() {
-    let gen = Generator::new(r"(?x)
+    let mut gen = Generator::new(r"(?x)
 (?P<year>[0-9]{4})  # the year
 -
 (?P<month>[0-9]{2}) # the month
 -
 (?P<day>[0-9]{2})   # the day
-").unwrap();
+", rand::thread_rng(), DEFAULT_MAX_REPEAT).unwrap();
     let mut buffer = vec![];
     gen.generate(&mut buffer).unwrap();
     let output = String::from_utf8(buffer).unwrap();
 
     println!("Random Date: {}", output);
-}!("Random Date: {}", output);
+}
 ```
 
 ## Tests
 
-Run tests with `cargo test`
+Run tests with `cargo test -- --nocapture`
 
 ## Benches
 
@@ -70,10 +71,8 @@ Run benchmarks with `rustup run nightly cargo bench`
 
 ## TODO
 
-- [ ] Use a custom error type
-- [ ] Write documentation
-- [ ] Cleanup uses of `.expect("Fail")`
 - [ ] Add convenience method for directly generating complete strings
+- [ ] Implement Iter for making lots of strings?
 - [ ] Add tests for regex bytes feature
 - [ ] Account for case insensitivity in `Literal`
 - [ ] Do something with group numbers or names? (No back referencing in the syntax, so maybe nothing can be done.)
