@@ -5,6 +5,9 @@ extern crate byteorder;
 extern crate rand;
 extern crate regex_syntax;
 
+mod errors;
+
+use errors::*;
 use std::io;
 use byteorder::WriteBytesExt;
 use rand::{Rng};
@@ -13,16 +16,6 @@ use regex_syntax::{Expr, Repeater};
 pub const DEFAULT_MAX_REPEAT: u32 = 100;
 const NEWLINE_U8: u8 = b'\n';
 const NEWLINE: char = '\n';
-
-/// Generate provides methods to fill a buffer with generated values
-// pub trait Generate<T: io::Write> {
-//     /// Fill the buffer with generated values, only performing repetitions up to the given number of times.
-//     fn generate_with_max_repeat(&self, buffer: &mut T, max_repeat: u32) -> io::Result<()>;
-//     /// Fill the buffer with generated values.
-//     fn generate(&self, buffer: &mut T) -> io::Result<()> {
-//         self.generate_with_max_repeat(buffer, DEFAULT_MAX_REPEAT)
-//     }
-// }
 
 /// Generator reads a string of regular expression syntax and generates strings based on it.
 pub struct Generator<R: Rng> {
@@ -33,12 +26,12 @@ pub struct Generator<R: Rng> {
 
 impl<R: Rng> Generator<R> {
     /// Create a new Generator from the regular expression
-    pub fn parse(s: &str, rng: R) -> Result<Generator<R>, regex_syntax::Error> {
+    pub fn parse(s: &str, rng: R) -> Result<Generator<R>> {
         Self::new(s, rng, DEFAULT_MAX_REPEAT)
     }
 
-    pub fn new(s: &str, rng: R, max_repeat: u32) -> Result<Generator<R>, regex_syntax::Error> {
-        let expr = Expr::parse(s)?;
+    pub fn new(s: &str, rng: R, max_repeat: u32) -> Result<Generator<R>> {
+        let expr = Expr::parse(s).chain_err(|| "could not parse expression")?;
         Ok(Generator {
             expr: expr,
             rng: rng,
@@ -46,15 +39,16 @@ impl<R: Rng> Generator<R> {
         })
     }
 
-    pub fn generate<W:io::Write>(&mut self, buffer: &mut W) -> io::Result<()> {
+    pub fn generate<W:io::Write>(&mut self, buffer: &mut W) -> Result<()> {
         Self::generate_from_expr(buffer, &self.expr, &mut self.rng, self.max_repeat)
     }
 
-    fn generate_from_expr<W:io::Write>(buffer: &mut W, expr: &Expr, rng: &mut R, max_repeat: u32) -> io::Result<()> {
-        fn write_char<W: io::Write>(c:char, buffer: &mut W) {
+    fn generate_from_expr<W:io::Write>(buffer: &mut W, expr: &Expr, rng: &mut R, max_repeat: u32) -> Result<()> {
+        fn write_char<W: io::Write>(c:char, buffer: &mut W) -> io::Result<()> {
             let mut b = [0; 4];
             let sl = c.encode_utf8(&mut b).len();
-            buffer.write(&b[0..sl]).expect("Fail");
+            buffer.write(&b[0..sl])?;
+            Ok(())
         }
 
         match expr {
@@ -66,21 +60,19 @@ impl<R: Rng> Generator<R> {
             &Expr::WordBoundaryAscii |
             &Expr::NotWordBoundaryAscii |
             &Expr::StartLine => Ok(()),
-            &Expr::EndLine => { write_char('\n', buffer); Ok(()) },
+            &Expr::EndLine => { write_char('\n', buffer).chain_err(|| "failed to write end of line") },
             &Expr::AnyChar => {
                 let c = rng.gen::<char>();
-                write_char(c, buffer);
-                Ok(())
+                write_char(c, buffer).chain_err(|| "failed to write any char")
             },
             &Expr::AnyCharNoNL => {
                 let mut c = NEWLINE;
                 while c == NEWLINE { c = rng.gen::<char>(); }
-                write_char(c, buffer);
-                Ok(())
+                write_char(c, buffer).chain_err(|| "failed to write any char no newline")
             },
             &Expr::Literal{ref chars, casei:_} => {
                 let s: String = chars.iter().collect();
-                buffer.write(s.as_bytes()).and(Ok(()))
+                buffer.write(s.as_bytes()).and(Ok(())).chain_err(|| "failed to write literal value")
             },
             &Expr::Class(ref ranges) => {
                 let idx = rng.gen_range(0, ranges.len());
@@ -89,7 +81,7 @@ impl<R: Rng> Generator<R> {
                 let end:u32 = range.end.into();
                 loop {
                     match std::char::from_u32(rng.gen_range(start, end + 1)) {
-                        Some(c) => { write_char(c, buffer); return Ok(()); },
+                        Some(c) => { return write_char(c, buffer).chain_err(|| "failed to write class") },
                         None => continue,
                     }
                 }
@@ -120,116 +112,23 @@ impl<R: Rng> Generator<R> {
                 }
                 Ok(())
             },
-            &Expr::AnyByte => buffer.write_u8(rng.gen::<u8>()),
+            &Expr::AnyByte => buffer.write_u8(rng.gen::<u8>()).chain_err(|| "failed to write any byte"),
             &Expr::AnyByteNoNL => {
                 let mut c = NEWLINE_U8;
                 while c == NEWLINE_U8 { c = rng.gen::<u8>(); }
-                buffer.write_u8(c)
+                buffer.write_u8(c).chain_err(|| "failed to write any byte no newline")
             }
             &Expr::ClassBytes(ref ranges) => {
                 let idx = rng.gen_range(0, ranges.len());
                 let range = ranges[idx];
                 buffer.write_u8(rng.gen_range(range.start, range.end + 1))
+                    .chain_err(|| "failed to write class bytes")
             }
-            &Expr::LiteralBytes{ref bytes, casei:_} => buffer.write(bytes).and(Ok(())),
+            &Expr::LiteralBytes{ref bytes, casei:_} => buffer.write(bytes).and(Ok(()))
+                .chain_err(|| "failed to write literal bytes"),
         }
     }
 }
-
-// impl<T: io::Write> Generate<T> for Generator {
-//     fn generate_with_max_repeat(&self, buffer: &mut T, max_repeat: u32) -> io::Result<()> {
-//         self.expr.generate_with_max_repeat(buffer, max_repeat)
-//     }
-// }
-
-// impl<T: io::Write> Generate<T> for Expr {
-//     fn generate_with_max_repeat(&self, buffer: &mut T, max_repeat: u32) -> io::Result<()> {
-//         let mut rng = rand::thread_rng();
-
-//         fn write_char<T: io::Write>(c:char, buffer: &mut T) {
-//             let mut b = [0; 4];
-//             let sl = c.encode_utf8(&mut b).len();
-//             buffer.write(&b[0..sl]).expect("Fail");
-//         }
-
-//         match self {
-//             &Expr::Empty |
-//             &Expr::StartText |
-//             &Expr::EndText |
-//             &Expr::WordBoundary |
-//             &Expr::NotWordBoundary |
-//             &Expr::WordBoundaryAscii |
-//             &Expr::NotWordBoundaryAscii |
-//             &Expr::StartLine => Ok(()),
-//             &Expr::EndLine => { write_char('\n', buffer); Ok(()) },
-//             &Expr::AnyChar => {
-//                 let c = rng.gen::<char>();
-//                 write_char(c, buffer);
-//                 Ok(())
-//             },
-//             &Expr::AnyCharNoNL => {
-//                 let mut c = NEWLINE;
-//                 while c == NEWLINE { c = rng.gen::<char>(); }
-//                 write_char(c, buffer);
-//                 Ok(())
-//             },
-//             &Expr::Literal{ref chars, casei:_} => {
-//                 let s: String = chars.iter().collect();
-//                 buffer.write(s.as_bytes()).and(Ok(()))
-//             },
-//             &Expr::Class(ref ranges) => {
-//                 let idx = rng.gen_range(0, ranges.len());
-//                 let range = ranges[idx];
-//                 let start:u32 = range.start.into();
-//                 let end:u32 = range.end.into();
-//                 loop {
-//                     match std::char::from_u32(rng.gen_range(start, end + 1)) {
-//                         Some(c) => { write_char(c, buffer); return Ok(()); },
-//                         None => continue,
-//                     }
-//                 }
-//             },
-//             &Expr::Group{e: ref exp, i:_, name:_} => exp.generate_with_max_repeat(buffer, max_repeat),
-//             &Expr::Concat(ref exps) => {
-//                 for exp in exps.iter() {
-//                     exp.generate_with_max_repeat(buffer, max_repeat).expect("Fail");
-//                 }
-//                 Ok(())
-//             },
-//             &Expr::Alternate(ref exps) => {
-//                 let idx = rng.gen_range(0, exps.len());
-//                 let ref exp = exps[idx];
-//                 exp.generate_with_max_repeat(buffer, max_repeat)
-//             },
-//             &Expr::Repeat{e: ref exp, r: rep, greedy} => {
-//                 let range = match rep {
-//                     Repeater::ZeroOrOne => if greedy { 0..2 } else { 0..1 },
-//                     Repeater::ZeroOrMore => if greedy { 0..max_repeat } else { 0..1 },
-//                     Repeater::OneOrMore => if greedy { 1..max_repeat } else { 1..2 },
-//                     Repeater::Range{min, max:None} => if greedy { min..max_repeat } else { min..(min + 1) },
-//                     Repeater::Range{min, max:Some(max)} => if greedy { min..(max + 1) } else { min..(min + 1) },
-//                 };
-//                 let count = rng.gen_range(range.start, range.end);
-//                 for _ in 0..count {
-//                     exp.generate_with_max_repeat(buffer, max_repeat).expect("Fail");
-//                 }
-//                 Ok(())
-//             },
-//             &Expr::AnyByte => buffer.write_u8(rng.gen::<u8>()),
-//             &Expr::AnyByteNoNL => {
-//                 let mut c = NEWLINE_U8;
-//                 while c == NEWLINE_U8 { c = rng.gen::<u8>(); }
-//                 buffer.write_u8(c)
-//             }
-//             &Expr::ClassBytes(ref ranges) => {
-//                 let idx = rng.gen_range(0, ranges.len());
-//                 let range = ranges[idx];
-//                 buffer.write_u8(rng.gen_range(range.start, range.end + 1))
-//             }
-//             &Expr::LiteralBytes{ref bytes, casei:_} => buffer.write(bytes).and(Ok(())),
-//         }
-//     }
-// }
 
 #[cfg(test)]
 mod tests {

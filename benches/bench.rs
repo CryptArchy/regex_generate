@@ -2,17 +2,18 @@
 
 extern crate test;
 extern crate regex_generate;
+extern crate rand;
 
 const RAND_BENCH_N: u64 = 1000;
 
 use test::{black_box, Bencher};
-use regex_generate::{Generate, Generator};
+use regex_generate::{DEFAULT_MAX_REPEAT, Generator};
 
 fn test_generate(raw: &str, b: &mut Bencher) {
-    let g = Generator::new(raw).unwrap();
+    let mut g = Generator::new(raw, rand::thread_rng(), DEFAULT_MAX_REPEAT).unwrap();
     let mut buffer = vec![];
 
-    b.iter(|| {
+    b.iter(move || {
         for _ in 0..RAND_BENCH_N {
             black_box(g.generate(&mut buffer)).unwrap();
             let buf = buffer.clone();
