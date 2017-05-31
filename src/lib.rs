@@ -25,11 +25,13 @@ pub struct Generator<R: Rng> {
 }
 
 impl<R: Rng> Generator<R> {
-    /// Create a new Generator from the regular expression
+    /// Create a new Generator from the regular expression string and use the given Rng for randomization.
     pub fn parse(s: &str, rng: R) -> Result<Generator<R>> {
         Self::new(s, rng, DEFAULT_MAX_REPEAT)
     }
 
+    /// Create a new Generator from the regular expression string and use the given Rng for randomization
+    /// with a maximum limit on repititions of the given amount.
     pub fn new(s: &str, rng: R, max_repeat: u32) -> Result<Generator<R>> {
         let expr = Expr::parse(s).chain_err(|| "could not parse expression")?;
         Ok(Generator {
@@ -39,6 +41,7 @@ impl<R: Rng> Generator<R> {
         })
     }
 
+    /// Fill the provided buffer with values randomly derived from the regular expression
     pub fn generate<W:io::Write>(&mut self, buffer: &mut W) -> Result<()> {
         Self::generate_from_expr(buffer, &self.expr, &mut self.rng, self.max_repeat)
     }
