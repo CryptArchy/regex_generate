@@ -1,58 +1,63 @@
+// `error_chain!` can recurse deeply
+#![recursion_limit = "1024"]
+#[macro_use] extern crate error_chain;
 extern crate byteorder;
 extern crate rand;
 extern crate regex_syntax;
 
+use std::io;
 use byteorder::WriteBytesExt;
 use rand::{Rng};
 use regex_syntax::{Expr, Repeater};
-use std::io;
 
-const DEFAULT_MAX_REPEAT: u32 = 100;
+pub const DEFAULT_MAX_REPEAT: u32 = 100;
 const NEWLINE_U8: u8 = b'\n';
 const NEWLINE: char = '\n';
 
 /// Generate provides methods to fill a buffer with generated values
-pub trait Generate<T: io::Write> {
-    /// Fill the buffer with generated values, only performing repetitions up to the given number of times.
-    fn generate_with_max_repeat(&self, buffer: &mut T, max_repeat: u32) -> io::Result<()>;
-    /// Fill the buffer with generated values.
-    fn generate(&self, buffer: &mut T) -> io::Result<()> {
-        self.generate_with_max_repeat(buffer, DEFAULT_MAX_REPEAT)
-    }
-}
+// pub trait Generate<T: io::Write> {
+//     /// Fill the buffer with generated values, only performing repetitions up to the given number of times.
+//     fn generate_with_max_repeat(&self, buffer: &mut T, max_repeat: u32) -> io::Result<()>;
+//     /// Fill the buffer with generated values.
+//     fn generate(&self, buffer: &mut T) -> io::Result<()> {
+//         self.generate_with_max_repeat(buffer, DEFAULT_MAX_REPEAT)
+//     }
+// }
 
 /// Generator reads a string of regular expression syntax and generates strings based on it.
-pub struct Generator {
+pub struct Generator<R: Rng> {
     expr: Expr,
+    rng: R,
+    max_repeat: u32,
 }
 
-impl Generator {
+impl<R: Rng> Generator<R> {
     /// Create a new Generator from the regular expression
-    pub fn new(s: &str) -> Result<Generator, regex_syntax::Error> {
+    pub fn parse(s: &str, rng: R) -> Result<Generator<R>, regex_syntax::Error> {
+        Self::new(s, rng, DEFAULT_MAX_REPEAT)
+    }
+
+    pub fn new(s: &str, rng: R, max_repeat: u32) -> Result<Generator<R>, regex_syntax::Error> {
         let expr = Expr::parse(s)?;
         Ok(Generator {
-            expr: expr
+            expr: expr,
+            rng: rng,
+            max_repeat: max_repeat,
         })
     }
-}
 
-impl<T: io::Write> Generate<T> for Generator {
-    fn generate_with_max_repeat(&self, buffer: &mut T, max_repeat: u32) -> io::Result<()> {
-        self.expr.generate_with_max_repeat(buffer, max_repeat)
+    pub fn generate<W:io::Write>(&mut self, buffer: &mut W) -> io::Result<()> {
+        Self::generate_from_expr(buffer, &self.expr, &mut self.rng, self.max_repeat)
     }
-}
 
-impl<T: io::Write> Generate<T> for Expr {
-    fn generate_with_max_repeat(&self, buffer: &mut T, max_repeat: u32) -> io::Result<()> {
-        let mut rng = rand::thread_rng();
-
-        fn write_char<T: io::Write>(c:char, buffer: &mut T) {
+    fn generate_from_expr<W:io::Write>(buffer: &mut W, expr: &Expr, rng: &mut R, max_repeat: u32) -> io::Result<()> {
+        fn write_char<W: io::Write>(c:char, buffer: &mut W) {
             let mut b = [0; 4];
             let sl = c.encode_utf8(&mut b).len();
             buffer.write(&b[0..sl]).expect("Fail");
         }
 
-        match self {
+        match expr {
             &Expr::Empty |
             &Expr::StartText |
             &Expr::EndText |
@@ -89,17 +94,17 @@ impl<T: io::Write> Generate<T> for Expr {
                     }
                 }
             },
-            &Expr::Group{e: ref exp, i:_, name:_} => exp.generate_with_max_repeat(buffer, max_repeat),
+            &Expr::Group{e: ref exp, i:_, name:_} => Self::generate_from_expr(buffer, exp, rng, max_repeat),
             &Expr::Concat(ref exps) => {
                 for exp in exps.iter() {
-                    exp.generate_with_max_repeat(buffer, max_repeat).expect("Fail");
+                    Self::generate_from_expr(buffer, exp, rng, max_repeat).expect("Fail");
                 }
                 Ok(())
             },
             &Expr::Alternate(ref exps) => {
                 let idx = rng.gen_range(0, exps.len());
                 let ref exp = exps[idx];
-                exp.generate_with_max_repeat(buffer, max_repeat)
+                Self::generate_from_expr(buffer, exp, rng, max_repeat)
             },
             &Expr::Repeat{e: ref exp, r: rep, greedy} => {
                 let range = match rep {
@@ -111,7 +116,7 @@ impl<T: io::Write> Generate<T> for Expr {
                 };
                 let count = rng.gen_range(range.start, range.end);
                 for _ in 0..count {
-                    exp.generate_with_max_repeat(buffer, max_repeat).expect("Fail");
+                    Self::generate_from_expr(buffer, exp, rng, max_repeat).expect("Fail");
                 }
                 Ok(())
             },
@@ -131,24 +136,121 @@ impl<T: io::Write> Generate<T> for Expr {
     }
 }
 
+// impl<T: io::Write> Generate<T> for Generator {
+//     fn generate_with_max_repeat(&self, buffer: &mut T, max_repeat: u32) -> io::Result<()> {
+//         self.expr.generate_with_max_repeat(buffer, max_repeat)
+//     }
+// }
+
+// impl<T: io::Write> Generate<T> for Expr {
+//     fn generate_with_max_repeat(&self, buffer: &mut T, max_repeat: u32) -> io::Result<()> {
+//         let mut rng = rand::thread_rng();
+
+//         fn write_char<T: io::Write>(c:char, buffer: &mut T) {
+//             let mut b = [0; 4];
+//             let sl = c.encode_utf8(&mut b).len();
+//             buffer.write(&b[0..sl]).expect("Fail");
+//         }
+
+//         match self {
+//             &Expr::Empty |
+//             &Expr::StartText |
+//             &Expr::EndText |
+//             &Expr::WordBoundary |
+//             &Expr::NotWordBoundary |
+//             &Expr::WordBoundaryAscii |
+//             &Expr::NotWordBoundaryAscii |
+//             &Expr::StartLine => Ok(()),
+//             &Expr::EndLine => { write_char('\n', buffer); Ok(()) },
+//             &Expr::AnyChar => {
+//                 let c = rng.gen::<char>();
+//                 write_char(c, buffer);
+//                 Ok(())
+//             },
+//             &Expr::AnyCharNoNL => {
+//                 let mut c = NEWLINE;
+//                 while c == NEWLINE { c = rng.gen::<char>(); }
+//                 write_char(c, buffer);
+//                 Ok(())
+//             },
+//             &Expr::Literal{ref chars, casei:_} => {
+//                 let s: String = chars.iter().collect();
+//                 buffer.write(s.as_bytes()).and(Ok(()))
+//             },
+//             &Expr::Class(ref ranges) => {
+//                 let idx = rng.gen_range(0, ranges.len());
+//                 let range = ranges[idx];
+//                 let start:u32 = range.start.into();
+//                 let end:u32 = range.end.into();
+//                 loop {
+//                     match std::char::from_u32(rng.gen_range(start, end + 1)) {
+//                         Some(c) => { write_char(c, buffer); return Ok(()); },
+//                         None => continue,
+//                     }
+//                 }
+//             },
+//             &Expr::Group{e: ref exp, i:_, name:_} => exp.generate_with_max_repeat(buffer, max_repeat),
+//             &Expr::Concat(ref exps) => {
+//                 for exp in exps.iter() {
+//                     exp.generate_with_max_repeat(buffer, max_repeat).expect("Fail");
+//                 }
+//                 Ok(())
+//             },
+//             &Expr::Alternate(ref exps) => {
+//                 let idx = rng.gen_range(0, exps.len());
+//                 let ref exp = exps[idx];
+//                 exp.generate_with_max_repeat(buffer, max_repeat)
+//             },
+//             &Expr::Repeat{e: ref exp, r: rep, greedy} => {
+//                 let range = match rep {
+//                     Repeater::ZeroOrOne => if greedy { 0..2 } else { 0..1 },
+//                     Repeater::ZeroOrMore => if greedy { 0..max_repeat } else { 0..1 },
+//                     Repeater::OneOrMore => if greedy { 1..max_repeat } else { 1..2 },
+//                     Repeater::Range{min, max:None} => if greedy { min..max_repeat } else { min..(min + 1) },
+//                     Repeater::Range{min, max:Some(max)} => if greedy { min..(max + 1) } else { min..(min + 1) },
+//                 };
+//                 let count = rng.gen_range(range.start, range.end);
+//                 for _ in 0..count {
+//                     exp.generate_with_max_repeat(buffer, max_repeat).expect("Fail");
+//                 }
+//                 Ok(())
+//             },
+//             &Expr::AnyByte => buffer.write_u8(rng.gen::<u8>()),
+//             &Expr::AnyByteNoNL => {
+//                 let mut c = NEWLINE_U8;
+//                 while c == NEWLINE_U8 { c = rng.gen::<u8>(); }
+//                 buffer.write_u8(c)
+//             }
+//             &Expr::ClassBytes(ref ranges) => {
+//                 let idx = rng.gen_range(0, ranges.len());
+//                 let range = ranges[idx];
+//                 buffer.write_u8(rng.gen_range(range.start, range.end + 1))
+//             }
+//             &Expr::LiteralBytes{ref bytes, casei:_} => buffer.write(bytes).and(Ok(())),
+//         }
+//     }
+// }
+
 #[cfg(test)]
 mod tests {
     extern crate regex;
 
-    use super::{Generate, Generator};
+    use super::{DEFAULT_MAX_REPEAT, Generator};
     use self::regex::Regex;
     use regex_syntax::Expr;
+    use rand;
 
     const TEST_N: u64 = 10000;
 
     fn test_regex(raw: &str) {
-        let expr = Expr::parse(raw).unwrap();
+        let mut gen = Generator::new(raw, rand::thread_rng(), DEFAULT_MAX_REPEAT).unwrap();
+        // let expr = Expr::parse(raw).unwrap();
         let rx = Regex::new(raw).unwrap();
         // println!("Testing: {:?} against \\{:?}\\", gen, rx);
         let mut buffer = vec![];
 
         for _ in 0..TEST_N {
-            expr.generate(&mut buffer).unwrap();
+            gen.generate(&mut buffer).unwrap();
             let b = buffer.clone();
             // let s = String::from_utf8_lossy(&b);
             // assert!(rx.is_match(&s), "Unexpected: {:?} on {:?}", s, raw);
@@ -362,26 +464,5 @@ mod tests {
     #[test]
     fn gen_complex() {
         test_regex(r"^(\p{Greek}\P{Greek})(?:\d{3,6})$");
-    }
-
-    fn test_generator(raw: &str) {
-        let g = Generator::new(raw).unwrap();
-        let rx = Regex::new(raw).unwrap();
-        let mut buffer = vec![];
-
-        for _ in 0..TEST_N {
-            g.generate(&mut buffer).unwrap();
-            let b = buffer.clone();
-            match String::from_utf8(b) {
-                Ok(s) => assert!(rx.is_match(&s), "Unexpected: {:?} on {:?}", s, raw),
-                Err(err) => assert!(false, "Error: {:?} {:?}", err, raw),
-            }
-            buffer.clear();
-        }
-    }
-
-    #[test]
-    fn generator() {
-        test_generator(r"\p{Latin}");
     }
 }
