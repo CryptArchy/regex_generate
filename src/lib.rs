@@ -1,7 +1,6 @@
 // `error_chain!` can recurse deeply
 #![recursion_limit = "1024"]
 #[macro_use] extern crate error_chain;
-extern crate byteorder;
 extern crate rand;
 extern crate regex_syntax;
 
@@ -9,17 +8,17 @@ mod errors;
 
 use errors::*;
 use std::io;
-use byteorder::WriteBytesExt;
+use std::ops::{Add, Sub, AddAssign};
 use rand::{Rng};
-use regex_syntax::{Expr, Repeater};
+use rand::distributions::uniform::{Uniform, SampleUniform};
+use regex_syntax::hir::{self, Hir, HirKind};
+use regex_syntax::Parser;
 
 pub const DEFAULT_MAX_REPEAT: u32 = 100;
-const NEWLINE_U8: u8 = b'\n';
-const NEWLINE: char = '\n';
 
 /// Generator reads a string of regular expression syntax and generates strings based on it.
 pub struct Generator<R: Rng> {
-    expr: Expr,
+    hir: Hir,
     rng: R,
     max_repeat: u32,
 }
@@ -33,9 +32,9 @@ impl<R: Rng> Generator<R> {
     /// Create a new Generator from the regular expression string and use the given Rng for randomization
     /// with a maximum limit on repititions of the given amount.
     pub fn new(s: &str, rng: R, max_repeat: u32) -> Result<Generator<R>> {
-        let expr = Expr::parse(s).chain_err(|| "could not parse expression")?;
+        let hir = Parser::new().parse(s).chain_err(|| "could not parse expression")?;
         Ok(Generator {
-            expr: expr,
+            hir: hir,
             rng: rng,
             max_repeat: max_repeat,
         })
@@ -43,10 +42,10 @@ impl<R: Rng> Generator<R> {
 
     /// Fill the provided buffer with values randomly derived from the regular expression
     pub fn generate<W:io::Write>(&mut self, buffer: &mut W) -> Result<()> {
-        Self::generate_from_expr(buffer, &self.expr, &mut self.rng, self.max_repeat)
+        Self::generate_from_hir(buffer, &self.hir, &mut self.rng, self.max_repeat)
     }
 
-    fn generate_from_expr<W:io::Write>(buffer: &mut W, expr: &Expr, rng: &mut R, max_repeat: u32) -> Result<()> {
+    fn generate_from_hir<W:io::Write>(buffer: &mut W, hir: &Hir, rng: &mut R, max_repeat: u32) -> Result<()> {
         fn write_char<W: io::Write>(c:char, buffer: &mut W) -> io::Result<()> {
             let mut b = [0; 4];
             let sl = c.encode_utf8(&mut b).len();
@@ -54,82 +53,125 @@ impl<R: Rng> Generator<R> {
             Ok(())
         }
 
-        match expr {
-            &Expr::Empty |
-            &Expr::StartText |
-            &Expr::EndText |
-            &Expr::WordBoundary |
-            &Expr::NotWordBoundary |
-            &Expr::WordBoundaryAscii |
-            &Expr::NotWordBoundaryAscii |
-            &Expr::StartLine => Ok(()),
-            &Expr::EndLine => { write_char('\n', buffer).chain_err(|| "failed to write end of line") },
-            &Expr::AnyChar => {
-                let c = rng.gen::<char>();
-                write_char(c, buffer).chain_err(|| "failed to write any char")
-            },
-            &Expr::AnyCharNoNL => {
-                let mut c = NEWLINE;
-                while c == NEWLINE { c = rng.gen::<char>(); }
-                write_char(c, buffer).chain_err(|| "failed to write any char no newline")
-            },
-            &Expr::Literal{ref chars, casei:_} => {
-                let s: String = chars.iter().collect();
-                buffer.write(s.as_bytes()).and(Ok(())).chain_err(|| "failed to write literal value")
-            },
-            &Expr::Class(ref ranges) => {
-                let idx = rng.gen_range(0, ranges.len());
-                let range = ranges[idx];
-                let start:u32 = range.start.into();
-                let end:u32 = range.end.into();
+        match *hir.kind() {
+            HirKind::Anchor(hir::Anchor::EndLine) => {
+                buffer.write(b"\n").chain_err(|| "failed to write end of line")?;
+                Ok(())
+            }
+            HirKind::Empty | HirKind::Anchor(_) | HirKind::WordBoundary(_) => {
+                Ok(())
+            }
+            HirKind::Literal(hir::Literal::Unicode(c)) => {
+                write_char(c, buffer).chain_err(|| "failed to write literal value")
+            }
+            HirKind::Literal(hir::Literal::Byte(b)) => {
+                buffer.write(&[b]).chain_err(|| "failed to write literal value")?;
+                Ok(())
+            }
+            HirKind::Class(hir::Class::Unicode(ref class)) => {
                 loop {
-                    match std::char::from_u32(rng.gen_range(start, end + 1)) {
-                        Some(c) => { return write_char(c, buffer).chain_err(|| "failed to write class") },
-                        None => continue,
+                    let val = sample_from_ranges(class.ranges(), rng);
+                    if let Some(c) = std::char::from_u32(val) {
+                        return write_char(c, buffer).chain_err(|| "failed to write class");
                     }
                 }
-            },
-            &Expr::Group{e: ref exp, i:_, name:_} => Self::generate_from_expr(buffer, exp, rng, max_repeat),
-            &Expr::Concat(ref exps) => {
-                for exp in exps.iter() {
-                    Self::generate_from_expr(buffer, exp, rng, max_repeat).expect("Fail");
-                }
+            }
+            HirKind::Class(hir::Class::Bytes(ref class)) => {
+                let b = sample_from_ranges(class.ranges(), rng) as u8;
+                buffer.write(&[b]).chain_err(|| "failed to write class")?;
                 Ok(())
-            },
-            &Expr::Alternate(ref exps) => {
-                let idx = rng.gen_range(0, exps.len());
-                let ref exp = exps[idx];
-                Self::generate_from_expr(buffer, exp, rng, max_repeat)
-            },
-            &Expr::Repeat{e: ref exp, r: rep, greedy} => {
-                let range = match rep {
-                    Repeater::ZeroOrOne => if greedy { 0..2 } else { 0..1 },
-                    Repeater::ZeroOrMore => if greedy { 0..max_repeat } else { 0..1 },
-                    Repeater::OneOrMore => if greedy { 1..max_repeat } else { 1..2 },
-                    Repeater::Range{min, max:None} => if greedy { min..max_repeat } else { min..(min + 1) },
-                    Repeater::Range{min, max:Some(max)} => if greedy { min..(max + 1) } else { min..(min + 1) },
+            }
+            HirKind::Repetition(ref repetition) => {
+                let limit = max_repeat - 1;
+                let range = match repetition.kind {
+                    hir::RepetitionKind::ZeroOrOne => (0, 1),
+                    hir::RepetitionKind::ZeroOrMore => (0, limit),
+                    hir::RepetitionKind::OneOrMore => (1, limit),
+                    hir::RepetitionKind::Range(ref r) => match *r {
+                        hir::RepetitionRange::Exactly(n) => (n, n),
+                        hir::RepetitionRange::AtLeast(n) => (n, limit),
+                        hir::RepetitionRange::Bounded(m, n) => (m, n),
+                    },
                 };
-                let count = rng.gen_range(range.start, range.end);
+                let count = if repetition.greedy {
+                    rng.sample(Uniform::new_inclusive(range.0, range.1))
+                } else {
+                    range.0
+                };
                 for _ in 0..count {
-                    Self::generate_from_expr(buffer, exp, rng, max_repeat).expect("Fail");
+                    Self::generate_from_hir(buffer, &repetition.hir, rng, max_repeat).expect("Fail");
                 }
                 Ok(())
-            },
-            &Expr::AnyByte => buffer.write_u8(rng.gen::<u8>()).chain_err(|| "failed to write any byte"),
-            &Expr::AnyByteNoNL => {
-                let mut c = NEWLINE_U8;
-                while c == NEWLINE_U8 { c = rng.gen::<u8>(); }
-                buffer.write_u8(c).chain_err(|| "failed to write any byte no newline")
             }
-            &Expr::ClassBytes(ref ranges) => {
-                let idx = rng.gen_range(0, ranges.len());
-                let range = ranges[idx];
-                buffer.write_u8(rng.gen_range(range.start, range.end + 1))
-                    .chain_err(|| "failed to write class bytes")
+            HirKind::Group(ref group) => {
+                Self::generate_from_hir(buffer, &group.hir, rng, max_repeat)
             }
-            &Expr::LiteralBytes{ref bytes, casei:_} => buffer.write(bytes).and(Ok(()))
-                .chain_err(|| "failed to write literal bytes"),
+            HirKind::Concat(ref hirs) => {
+                for h in hirs {
+                    Self::generate_from_hir(buffer, h, rng, max_repeat).expect("Fail");
+                }
+                Ok(())
+            }
+            HirKind::Alternation(ref hirs) => {
+                let h = rng.choose(hirs).expect("non empty alternations");
+                Self::generate_from_hir(buffer, h, rng, max_repeat)
+            }
         }
+    }
+}
+
+trait Interval {
+    type Item: SampleUniform
+        + Add<Output = Self::Item>
+        + Sub<Output = Self::Item>
+        + AddAssign
+        + From<u8>
+        + Copy
+        + Ord;
+    fn bounds(&self) -> (Self::Item, Self::Item);
+}
+
+impl Interval for hir::ClassUnicodeRange {
+    type Item = u32;
+    fn bounds(&self) -> (Self::Item, Self::Item) { (self.start().into(), self.end().into()) }
+}
+
+impl Interval for hir::ClassBytesRange {
+    type Item = u8;
+    fn bounds(&self) -> (Self::Item, Self::Item) { (self.start(), self.end()) }
+}
+
+const SAMPLE_UNBIASED_LIMIT: usize = 2;
+
+fn sample_from_ranges<I: Interval, R: Rng>(ranges: &[I], rng: &mut R) -> I::Item {
+    if ranges.len() <= SAMPLE_UNBIASED_LIMIT {
+        // We use unbiased sampling when number of ranges is small.
+        // In particular this includes the case of `.` (AnyCharNoNL),
+        // which is equivalent to `[\u{0}-\u{9}\u{b}-\u{10ffff}]`.
+        // Using the biased sample will give \u{0}-\u{9} 50% of the time and is unrealistic.
+
+        let zero = I::Item::from(0);
+        let mut normalized_ranges = [(zero, zero); SAMPLE_UNBIASED_LIMIT];
+        let mut normalized_len = zero;
+        for (i, r) in ranges.iter().enumerate() {
+            let (start, end) = r.bounds();
+            normalized_ranges[i] = (normalized_len, start);
+            normalized_len += end - start + I::Item::from(1);
+        }
+
+        let normalized_index = rng.gen_range(zero, normalized_len);
+        let range_index = normalized_ranges[..ranges.len()]
+            .binary_search_by(|&(ns, _)| ns.cmp(&normalized_index))
+            .unwrap_or_else(|i| i - 1);
+        let (normalized_start, start) = normalized_ranges[range_index];
+
+        normalized_index - normalized_start + start
+
+    } else {
+        // We use biased sampling otherwise due to speed concern.
+        let range = rng.choose(ranges).expect("at least one range in the class");
+        let (start, end) = range.bounds();
+        rng.sample(Uniform::new_inclusive(start, end))
     }
 }
 
@@ -139,7 +181,6 @@ mod tests {
 
     use super::{DEFAULT_MAX_REPEAT, Generator};
     use self::regex::Regex;
-    use regex_syntax::Expr;
     use rand;
 
     const TEST_N: u64 = 10000;
