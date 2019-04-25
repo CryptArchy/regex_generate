@@ -9,8 +9,9 @@ mod errors;
 use errors::*;
 use std::io;
 use std::ops::{Add, Sub, AddAssign};
-use rand::{Rng};
+use rand::Rng;
 use rand::distributions::uniform::{Uniform, SampleUniform};
+use rand::seq::SliceRandom;
 use regex_syntax::hir::{self, Hir, HirKind};
 use regex_syntax::Parser;
 
@@ -113,7 +114,7 @@ impl<R: Rng> Generator<R> {
                 Ok(())
             }
             HirKind::Alternation(ref hirs) => {
-                let h = rng.choose(hirs).expect("non empty alternations");
+                let h = hirs.choose(rng).expect("non empty alternations");
                 Self::generate_from_hir(buffer, h, rng, max_repeat)
             }
         }
@@ -169,7 +170,7 @@ fn sample_from_ranges<I: Interval, R: Rng>(ranges: &[I], rng: &mut R) -> I::Item
 
     } else {
         // We use biased sampling otherwise due to speed concern.
-        let range = rng.choose(ranges).expect("at least one range in the class");
+        let range = ranges.choose(rng).expect("at least one range in the class");
         let (start, end) = range.bounds();
         rng.sample(Uniform::new_inclusive(start, end))
     }
