@@ -160,7 +160,7 @@ fn sample_from_ranges<I: Interval, R: Rng>(ranges: &[I], rng: &mut R) -> I::Item
             normalized_len += end - start + I::Item::from(1);
         }
 
-        let normalized_index = rng.gen_range(zero, normalized_len);
+        let normalized_index = rng.gen_range(zero..normalized_len);
         let range_index = normalized_ranges[..ranges.len()]
             .binary_search_by(|&(ns, _)| ns.cmp(&normalized_index))
             .unwrap_or_else(|i| i - 1);
