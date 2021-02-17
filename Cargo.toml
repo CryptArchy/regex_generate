@@ -14,7 +14,7 @@ keywords = ["regex", "text", "generation"]
 categories = ["text-processing"]
 
 [dependencies]
-rand = "0.7"
+rand = "0.8"
 regex-syntax = "0.6.11"
 error-chain = "0.12.1"
 
