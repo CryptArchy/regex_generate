@@ -1,6 +1,6 @@
 [package]
 name = "regex_generate"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["CryptArchy <codexarcanum@gmail.com>"]
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -15,8 +15,8 @@ categories = ["text-processing"]
 
 [dependencies]
 rand = "0.8"
-regex-syntax = "0.6.11"
-error-chain = "0.12.1"
+regex-syntax = "0.6.28"
+error-chain = "0.12.4"
 
 [dev-dependencies]
-regex = "1.2.1"
+regex = "1.7.1"
