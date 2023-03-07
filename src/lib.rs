@@ -43,80 +43,82 @@ impl<R: Rng> Generator<R> {
 
     /// Fill the provided buffer with values randomly derived from the regular expression
     pub fn generate<W:io::Write>(&mut self, buffer: &mut W) -> Result<()> {
-        Self::generate_from_hir(buffer, &self.hir, &mut self.rng, self.max_repeat)
+        generate_from_hir(buffer, &self.hir, &mut self.rng, self.max_repeat)
+    }
+}
+
+pub fn generate_from_hir<W:io::Write, R: Rng>(buffer: &mut W, hir: &Hir, rng: &mut R, max_repeat: u32) -> Result<()> {
+    #[allow(clippy::unused_io_amount)]
+    fn write_char<W: io::Write>(c:char, buffer: &mut W) -> io::Result<()> {
+        let mut b = [0; 4];
+        let sl = c.encode_utf8(&mut b).len();
+        buffer.write(&b[0..sl])?;
+        Ok(())
     }
 
-    fn generate_from_hir<W:io::Write>(buffer: &mut W, hir: &Hir, rng: &mut R, max_repeat: u32) -> Result<()> {
-        fn write_char<W: io::Write>(c:char, buffer: &mut W) -> io::Result<()> {
-            let mut b = [0; 4];
-            let sl = c.encode_utf8(&mut b).len();
-            buffer.write_all(&b[0..sl])?;
+
+    match *hir.kind() {
+        HirKind::Anchor(hir::Anchor::EndLine) => {
+            buffer.write(b"\n").chain_err(|| "failed to write end of line")?;
             Ok(())
         }
-
-        match *hir.kind() {
-            HirKind::Anchor(hir::Anchor::EndLine) => {
-                buffer.write(b"\n").chain_err(|| "failed to write end of line")?;
-                Ok(())
-            }
-            HirKind::Empty | HirKind::Anchor(_) | HirKind::WordBoundary(_) => {
-                Ok(())
-            }
-            HirKind::Literal(hir::Literal::Unicode(c)) => {
-                write_char(c, buffer).chain_err(|| "failed to write literal value")
-            }
-            HirKind::Literal(hir::Literal::Byte(b)) => {
-                buffer.write(&[b]).chain_err(|| "failed to write literal value")?;
-                Ok(())
-            }
-            HirKind::Class(hir::Class::Unicode(ref class)) => {
-                loop {
-                    let val = sample_from_ranges(class.ranges(), rng);
-                    if let Some(c) = std::char::from_u32(val) {
-                        return write_char(c, buffer).chain_err(|| "failed to write class");
-                    }
+        HirKind::Empty | HirKind::Anchor(_) | HirKind::WordBoundary(_) => {
+            Ok(())
+        }
+        HirKind::Literal(hir::Literal::Unicode(c)) => {
+            write_char(c, buffer).chain_err(|| "failed to write literal value")
+        }
+        HirKind::Literal(hir::Literal::Byte(b)) => {
+            buffer.write(&[b]).chain_err(|| "failed to write literal value")?;
+            Ok(())
+        }
+        HirKind::Class(hir::Class::Unicode(ref class)) => {
+            loop {
+                let val = sample_from_ranges(class.ranges(), rng);
+                if let Some(c) = std::char::from_u32(val) {
+                    return write_char(c, buffer).chain_err(|| "failed to write class");
                 }
             }
-            HirKind::Class(hir::Class::Bytes(ref class)) => {
-                let b = sample_from_ranges(class.ranges(), rng) as u8;
-                buffer.write(&[b]).chain_err(|| "failed to write class")?;
-                Ok(())
+        }
+        HirKind::Class(hir::Class::Bytes(ref class)) => {
+            let b = sample_from_ranges(class.ranges(), rng) as u8;
+            buffer.write(&[b]).chain_err(|| "failed to write class")?;
+            Ok(())
+        }
+        HirKind::Repetition(ref repetition) => {
+            let limit = max_repeat - 1;
+            let range = match repetition.kind {
+                hir::RepetitionKind::ZeroOrOne => (0, 1),
+                hir::RepetitionKind::ZeroOrMore => (0, limit),
+                hir::RepetitionKind::OneOrMore => (1, limit),
+                hir::RepetitionKind::Range(ref r) => match *r {
+                    hir::RepetitionRange::Exactly(n) => (n, n),
+                    hir::RepetitionRange::AtLeast(n) => (n, limit),
+                    hir::RepetitionRange::Bounded(m, n) => (m, n),
+                },
+            };
+            let count = if repetition.greedy {
+                rng.sample(Uniform::new_inclusive(range.0, range.1))
+            } else {
+                range.0
+            };
+            for _ in 0..count {
+                generate_from_hir(buffer, &repetition.hir, rng, max_repeat).expect("Fail");
             }
-            HirKind::Repetition(ref repetition) => {
-                let limit = max_repeat - 1;
-                let range = match repetition.kind {
-                    hir::RepetitionKind::ZeroOrOne => (0, 1),
-                    hir::RepetitionKind::ZeroOrMore => (0, limit),
-                    hir::RepetitionKind::OneOrMore => (1, limit),
-                    hir::RepetitionKind::Range(ref r) => match *r {
-                        hir::RepetitionRange::Exactly(n) => (n, n),
-                        hir::RepetitionRange::AtLeast(n) => (n, limit),
-                        hir::RepetitionRange::Bounded(m, n) => (m, n),
-                    },
-                };
-                let count = if repetition.greedy {
-                    rng.sample(Uniform::new_inclusive(range.0, range.1))
-                } else {
-                    range.0
-                };
-                for _ in 0..count {
-                    Self::generate_from_hir(buffer, &repetition.hir, rng, max_repeat).expect("Fail");
-                }
-                Ok(())
+            Ok(())
+        }
+        HirKind::Group(ref group) => {
+            generate_from_hir(buffer, &group.hir, rng, max_repeat)
+        }
+        HirKind::Concat(ref hirs) => {
+            for h in hirs {
+                generate_from_hir(buffer, h, rng, max_repeat).expect("Fail");
             }
-            HirKind::Group(ref group) => {
-                Self::generate_from_hir(buffer, &group.hir, rng, max_repeat)
-            }
-            HirKind::Concat(ref hirs) => {
-                for h in hirs {
-                    Self::generate_from_hir(buffer, h, rng, max_repeat).expect("Fail");
-                }
-                Ok(())
-            }
-            HirKind::Alternation(ref hirs) => {
-                let h = hirs.choose(rng).expect("non empty alternations");
-                Self::generate_from_hir(buffer, h, rng, max_repeat)
-            }
+            Ok(())
+        }
+        HirKind::Alternation(ref hirs) => {
+            let h = hirs.choose(rng).expect("non empty alternations");
+            generate_from_hir(buffer, h, rng, max_repeat)
         }
     }
 }
