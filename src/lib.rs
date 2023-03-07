@@ -31,13 +31,13 @@ impl<R: Rng> Generator<R> {
     }
 
     /// Create a new Generator from the regular expression string and use the given Rng for randomization
-    /// with a maximum limit on repititions of the given amount.
+    /// with a maximum limit on repetitions of the given amount.
     pub fn new(s: &str, rng: R, max_repeat: u32) -> Result<Generator<R>> {
         let hir = Parser::new().parse(s).chain_err(|| "could not parse expression")?;
         Ok(Generator {
-            hir: hir,
-            rng: rng,
-            max_repeat: max_repeat,
+            hir,
+            rng,
+            max_repeat,
         })
     }
 
@@ -55,6 +55,7 @@ pub fn generate_from_hir<W:io::Write, R: Rng>(buffer: &mut W, hir: &Hir, rng: &m
         buffer.write(&b[0..sl])?;
         Ok(())
     }
+
 
     match *hir.kind() {
         HirKind::Anchor(hir::Anchor::EndLine) => {
